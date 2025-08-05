@@ -58,10 +58,15 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Include Proj4Leaflet for coordinate system handling -->
+    <script src="https://unpkg.com/proj4@2.9.2/dist/proj4.js"></script>
+    <script src="https://unpkg.com/proj4leaflet@1.0.2/src/proj4leaflet.js"></script>
 
     <script>
-        // Initialize map
-        var map = L.map('map').setView([40.7128, -74.0060], 10);
+        // Initialize map - Leaflet handles Web Mercator (EPSG:3857) natively
+        var map = L.map('map', {
+            crs: L.CRS.EPSG3857  // Explicitly set to match your data
+        }).setView([0, 0], 2);  // Will be overridden when data loads
         
         // Add base tile layer
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -90,7 +95,7 @@
                 loadingStatus.textContent = 'Error loading data index';
             });
         
-        // Color function based on population
+        // Color function based on population values
         function getColor(population) {
             return population > 100 ? '#800026' :
                    population > 80  ? '#BD0026' :
@@ -98,7 +103,7 @@
                    population > 40  ? '#FC4E2A' :
                    population > 20  ? '#FD8D3C' :
                    population > 10  ? '#FEB24C' :
-                   population > 0   ? '#FED976' :
+                   population > 5   ? '#FED976' :
                                      '#FFEDA0';
         }
         
@@ -117,8 +122,11 @@
         // Popup function
         function onEachFeature(feature, layer) {
             var popupContent = `
-                <strong>H3 Index:</strong> ${feature.properties.h3}<br>
-                <strong>Population:</strong> ${feature.properties.population}
+                <div style="font-family: Arial, sans-serif;">
+                    <strong>H3 Index:</strong><br>
+                    <code style="font-size: 0.9em; background: #f5f5f5; padding: 2px 4px;">${feature.properties.h3}</code><br><br>
+                    <strong>Population:</strong> ${feature.properties.population}
+                </div>
             `;
             layer.bindPopup(popupContent);
         }
@@ -131,6 +139,7 @@
                     return response.json();
                 })
                 .then(data => {
+                    // Since your data is already in EPSG:3857, Leaflet will handle it directly
                     var layer = L.geoJSON(data, {
                         style: styleFeature,
                         onEachFeature: onEachFeature
@@ -173,13 +182,13 @@
                 // Fit map to all loaded data
                 if (loadedLayers.length > 0) {
                     var group = new L.featureGroup(loadedLayers);
-                    map.fitBounds(group.getBounds(), { padding: [10, 10] });
+                    map.fitBounds(group.getBounds(), { padding: [20, 20] });
                 }
                 
                 loadingStatus.textContent = `All ${loadedLayers.length} chunks loaded successfully!`;
                 setTimeout(() => {
                     loadingIndicator.style.display = 'none';
-                }, 2000);
+                }, 3000);
                 
             } catch (error) {
                 console.error('Error loading chunks:', error);
@@ -199,30 +208,38 @@
         var legend = L.control({position: 'bottomright'});
         legend.onAdd = function (map) {
             var div = L.DomUtil.create('div', 'legend'),
-                grades = [0, 10, 20, 40, 60, 80, 100],
+                grades = [0, 5, 10, 20, 40, 60, 80, 100],
                 labels = [];
 
             div.innerHTML += '<strong>Population</strong><br>';
             
             for (var i = 0; i < grades.length; i++) {
                 div.innerHTML +=
-                    '<div><i style="background:' + getColor(grades[i] + 1) + 
-                    '; width: 18px; height: 18px; display: inline-block; margin-right: 8px;"></i> ' +
+                    '<div style="margin: 2px 0;"><i style="background:' + getColor(grades[i] + 1) + 
+                    '; width: 18px; height: 18px; display: inline-block; margin-right: 8px; border: 1px solid #ccc;"></i> ' +
                     grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] : '+') + '</div>';
             }
             return div;
         };
         legend.addTo(map);
         
-        // Load chunks when map moves (optional - for large datasets)
-        var loadVisibleChunks = false; // Set to true if you want viewport-based loading
+        // Add scale control
+        L.control.scale().addTo(map);
         
-        if (loadVisibleChunks) {
-            map.on('moveend', function() {
-                // Implementation for loading only visible chunks
-                // This is more complex but useful for very large datasets
-            });
-        }
+        // Optional: Load first chunk automatically to show something immediately
+        setTimeout(() => {
+            if (chunksData && chunksData.chunks.length > 0) {
+                loadChunk(chunksData.chunks[0], 0, 1)
+                    .then(() => {
+                        console.log('First chunk loaded automatically');
+                        // Fit to first chunk
+                        if (loadedLayers.length > 0) {
+                            map.fitBounds(loadedLayers[0].getBounds(), { padding: [20, 20] });
+                        }
+                    })
+                    .catch(console.error);
+            }
+        }, 1000);
     </script>
 </body>
 </html>
