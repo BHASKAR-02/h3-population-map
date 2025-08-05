@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>H3 Population Map - Chunked Data</title>
+    <title>H3 Population Map - Canary Islands</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -58,15 +58,10 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Include Proj4Leaflet for coordinate system handling -->
-    <script src="https://unpkg.com/proj4@2.9.2/dist/proj4.js"></script>
-    <script src="https://unpkg.com/proj4leaflet@1.0.2/src/proj4leaflet.js"></script>
 
     <script>
-        // Initialize map - Leaflet handles Web Mercator (EPSG:3857) natively
-        var map = L.map('map', {
-            crs: L.CRS.EPSG3857  // Explicitly set to match your data
-        }).setView([0, 0], 2);  // Will be overridden when data loads
+        // Initialize map with standard WGS84 projection
+        var map = L.map('map').setView([28.08, -14.37], 10); // Canary Islands
         
         // Add base tile layer
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -82,8 +77,33 @@
         var loadingStatus = document.getElementById('loadingStatus');
         var chunksLoadedSpan = document.getElementById('chunksLoaded');
         
+        // Function to convert EPSG:3857 coordinates to EPSG:4326 (lat/lon)
+        function webMercatorToLatLng(x, y) {
+            var lng = (x / 20037508.34) * 180;
+            var lat = (y / 20037508.34) * 180;
+            lat = 180 / Math.PI * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
+            return [lat, lng];
+        }
+        
+        // Function to transform coordinates in a geometry
+        function transformGeometry(geometry) {
+            if (geometry.type === 'Polygon') {
+                return {
+                    type: 'Polygon',
+                    coordinates: geometry.coordinates.map(ring =>
+                        ring.map(coord => {
+                            var latLng = webMercatorToLatLng(coord[0], coord[1]);
+                            return [latLng[1], latLng[0]]; // [lng, lat] for GeoJSON
+                        })
+                    )
+                };
+            }
+            // Add other geometry types if needed
+            return geometry;
+        }
+        
         // Load chunks index
-        fetch('./h3_geojson_chunks_kontor/chunks_index.json')
+        fetch('./h3_geojson_chunks/chunks_index.json')
             .then(response => response.json())
             .then(data => {
                 chunksData = data;
@@ -124,23 +144,37 @@
             var popupContent = `
                 <div style="font-family: Arial, sans-serif;">
                     <strong>H3 Index:</strong><br>
-                    <code style="font-size: 0.9em; background: #f5f5f5; padding: 2px 4px;">${feature.properties.h3}</code><br><br>
+                    <code style="font-size: 0.9em; background: #f5f5f5; padding: 2px 4px; word-break: break-all;">${feature.properties.h3}</code><br><br>
                     <strong>Population:</strong> ${feature.properties.population}
                 </div>
             `;
             layer.bindPopup(popupContent);
         }
         
-        // Load a single chunk
+        // Load a single chunk with coordinate transformation
         function loadChunk(chunkInfo, index, total) {
-            return fetch(`./h3_geojson_chunks_kontor/${chunkInfo.filename}`)
+            return fetch(`./h3_geojson_chunks/${chunkInfo.filename}`)
                 .then(response => {
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     return response.json();
                 })
                 .then(data => {
-                    // Since your data is already in EPSG:3857, Leaflet will handle it directly
-                    var layer = L.geoJSON(data, {
+                    // Transform coordinates from EPSG:3857 to EPSG:4326
+                    var transformedData = {
+                        ...data,
+                        crs: {
+                            type: "name",
+                            properties: {
+                                name: "urn:ogc:def:crs:EPSG::4326"
+                            }
+                        },
+                        features: data.features.map(feature => ({
+                            ...feature,
+                            geometry: transformGeometry(feature.geometry)
+                        }))
+                    };
+                    
+                    var layer = L.geoJSON(transformedData, {
                         style: styleFeature,
                         onEachFeature: onEachFeature
                     }).addTo(map);
@@ -172,7 +206,7 @@
             loadingProgress.textContent = `0/${chunksData.chunks.length}`;
             
             try {
-                // Load chunks sequentially to avoid overwhelming the browser
+                // Load chunks sequentially
                 for (let i = 0; i < chunksData.chunks.length; i++) {
                     await loadChunk(chunksData.chunks[i], i, chunksData.chunks.length);
                     // Small delay to allow UI updates
@@ -226,15 +260,15 @@
         // Add scale control
         L.control.scale().addTo(map);
         
-        // Optional: Load first chunk automatically to show something immediately
+        // Load first chunk automatically to show something immediately
         setTimeout(() => {
             if (chunksData && chunksData.chunks.length > 0) {
                 loadChunk(chunksData.chunks[0], 0, 1)
                     .then(() => {
                         console.log('First chunk loaded automatically');
-                        // Fit to first chunk
                         if (loadedLayers.length > 0) {
-                            map.fitBounds(loadedLayers[0].getBounds(), { padding: [20, 20] });
+                            var group = new L.featureGroup(loadedLayers);
+                            map.fitBounds(group.getBounds(), { padding: [20, 20] });
                         }
                     })
                     .catch(console.error);
