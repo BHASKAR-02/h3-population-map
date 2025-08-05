@@ -125,7 +125,7 @@
         
         // Load a single chunk
         function loadChunk(chunkInfo, index, total) {
-            return fetch(`./h3_geojson_chunks/${chunkInfo.filename}`)
+            return fetch(`./h3_geojson_chunks_kontor/${chunkInfo.filename}`)
                 .then(response => {
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     return response.json();
