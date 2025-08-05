@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>H3 Population Map - Chunked Data</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        
+        .loading-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+        
+        .legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 60px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="loading-indicator" id="loadingIndicator" style="display: none;">
+        <div>Loading chunks: <span id="loadingProgress">0/0</span></div>
+        <div><small id="loadingStatus">Initializing...</small></div>
+    </div>
+    
+    <div class="controls">
+        <button onclick="loadAllChunks()">Load All Data</button>
+        <button onclick="clearData()">Clear Data</button>
+        <br><small>Chunks loaded: <span id="chunksLoaded">0</span></small>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // Initialize map
+        var map = L.map('map').setView([40.7128, -74.0060], 10);
+        
+        // Add base tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 18
+        }).addTo(map);
+        
+        // Global variables
+        var loadedLayers = [];
+        var chunksData = null;
+        var loadingIndicator = document.getElementById('loadingIndicator');
+        var loadingProgress = document.getElementById('loadingProgress');
+        var loadingStatus = document.getElementById('loadingStatus');
+        var chunksLoadedSpan = document.getElementById('chunksLoaded');
+        
+        // Load chunks index
+        fetch('./h3_geojson_chunks_kontor/chunks_index.json')
+            .then(response => response.json())
+            .then(data => {
+                chunksData = data;
+                console.log(`Found ${data.total_chunks} chunks with ${data.total_features} features (${data.total_size_mb} MB total)`);
+                loadingStatus.textContent = `${data.total_chunks} chunks available (${data.total_size_mb} MB)`;
+            })
+            .catch(error => {
+                console.error('Error loading chunks index:', error);
+                loadingStatus.textContent = 'Error loading data index';
+            });
+        
+        // Color function based on population
+        function getColor(population) {
+            return population > 100 ? '#800026' :
+                   population > 80  ? '#BD0026' :
+                   population > 60  ? '#E31A1C' :
+                   population > 40  ? '#FC4E2A' :
+                   population > 20  ? '#FD8D3C' :
+                   population > 10  ? '#FEB24C' :
+                   population > 0   ? '#FED976' :
+                                     '#FFEDA0';
+        }
+        
+        // Style function
+        function styleFeature(feature) {
+            var population = feature.properties.population || 0;
+            return {
+                fillColor: getColor(population),
+                weight: 0.5,
+                opacity: 1,
+                color: 'white',
+                fillOpacity: 0.7
+            };
+        }
+        
+        // Popup function
+        function onEachFeature(feature, layer) {
+            var popupContent = `
+                <strong>H3 Index:</strong> ${feature.properties.h3}<br>
+                <strong>Population:</strong> ${feature.properties.population}
+            `;
+            layer.bindPopup(popupContent);
+        }
+        
+        // Load a single chunk
+        function loadChunk(chunkInfo, index, total) {
+            return fetch(`./h3_geojson_chunks/${chunkInfo.filename}`)
+                .then(response => {
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    var layer = L.geoJSON(data, {
+                        style: styleFeature,
+                        onEachFeature: onEachFeature
+                    }).addTo(map);
+                    
+                    loadedLayers.push(layer);
+                    
+                    // Update progress
+                    loadingProgress.textContent = `${index + 1}/${total}`;
+                    chunksLoadedSpan.textContent = loadedLayers.length;
+                    loadingStatus.textContent = `Loaded ${chunkInfo.filename} (${chunkInfo.features} features)`;
+                    
+                    return layer;
+                })
+                .catch(error => {
+                    console.error(`Error loading chunk ${chunkInfo.filename}:`, error);
+                    loadingStatus.textContent = `Error loading ${chunkInfo.filename}`;
+                    throw error;
+                });
+        }
+        
+        // Load all chunks
+        async function loadAllChunks() {
+            if (!chunksData) {
+                alert('Chunks data not ready. Please wait...');
+                return;
+            }
+            
+            loadingIndicator.style.display = 'block';
+            loadingProgress.textContent = `0/${chunksData.chunks.length}`;
+            
+            try {
+                // Load chunks sequentially to avoid overwhelming the browser
+                for (let i = 0; i < chunksData.chunks.length; i++) {
+                    await loadChunk(chunksData.chunks[i], i, chunksData.chunks.length);
+                    // Small delay to allow UI updates
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+                
+                // Fit map to all loaded data
+                if (loadedLayers.length > 0) {
+                    var group = new L.featureGroup(loadedLayers);
+                    map.fitBounds(group.getBounds(), { padding: [10, 10] });
+                }
+                
+                loadingStatus.textContent = `All ${loadedLayers.length} chunks loaded successfully!`;
+                setTimeout(() => {
+                    loadingIndicator.style.display = 'none';
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Error loading chunks:', error);
+                loadingStatus.textContent = 'Error loading some chunks';
+            }
+        }
+        
+        // Clear all loaded data
+        function clearData() {
+            loadedLayers.forEach(layer => map.removeLayer(layer));
+            loadedLayers = [];
+            chunksLoadedSpan.textContent = '0';
+            loadingStatus.textContent = 'Data cleared';
+        }
+        
+        // Add legend
+        var legend = L.control({position: 'bottomright'});
+        legend.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'legend'),
+                grades = [0, 10, 20, 40, 60, 80, 100],
+                labels = [];
+
+            div.innerHTML += '<strong>Population</strong><br>';
+            
+            for (var i = 0; i < grades.length; i++) {
+                div.innerHTML +=
+                    '<div><i style="background:' + getColor(grades[i] + 1) + 
+                    '; width: 18px; height: 18px; display: inline-block; margin-right: 8px;"></i> ' +
+                    grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] : '+') + '</div>';
+            }
+            return div;
+        };
+        legend.addTo(map);
+        
+        // Load chunks when map moves (optional - for large datasets)
+        var loadVisibleChunks = false; // Set to true if you want viewport-based loading
+        
+        if (loadVisibleChunks) {
+            map.on('moveend', function() {
+                // Implementation for loading only visible chunks
+                // This is more complex but useful for very large datasets
+            });
+        }
+    </script>
+</body>
+</html>
